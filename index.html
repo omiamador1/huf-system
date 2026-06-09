@@ -1354,12 +1354,9 @@ onkeydown="manejarTeclado(event)" onclick="hideContextMenu()">
     let selF = { years: [], statuses: [], locs: [], types: [] };
     let isSummaryActive = false;
 
-    function handleLogin() { if(document.getElementById('user').value === "admin" && document.getElementById('pass').value === "huf2026") showMenu(); else alert("Credenciales inválidas"); }
-    function showMenu() { switchView('menu-view'); }
     function showApp() { isSummaryActive = false; switchView('main-app'); initApp(); }
     function showSummary() { isSummaryActive = true; switchView('summary-view'); window.scrollTo(0, 0); updateUI(); }
     function switchView(id) { document.querySelectorAll('.view').forEach(v => v.classList.remove('active')); document.getElementById(id).classList.add('active'); }
-    function handleLogout() { location.reload(); }
 
     
      Chart.register(ChartDataLabels);
@@ -1379,12 +1376,7 @@ db.ref('toolingProjects').on('value', (snapshot) => {
         toolingProjects = snapshot.val() || [];
      
     });
-    function showModule(viewId) {
-        document.querySelectorAll('.view-layer').forEach(v => v.classList.remove('active-view'));
-        document.getElementById(viewId).classList.add('active-view');
-        const card = document.getElementById('mainCard');
-        viewId === 'viewLogin' || viewId === 'viewMenu' ? card.classList.remove('wide-view') : card.classList.add('wide-view');
-    }
+    
 
     function updateProjectMenus() {
         const selCreate = document.getElementById('hoursProjectSelect');
@@ -2064,6 +2056,19 @@ function getPastelColor(typeId) {
     const color = typeColors[typeId.toString()];
     return color ? color : '#dfe6e9';
 }
+
+// Devuelve el color para una barra del Gantt.
+// Si el nombre del HIM contiene '*', devuelve un patrón/gradiente distintivo.
+function getBarColor(team) {
+    try {
+        if (team && typeof team.name === 'string' && team.name.includes('*')) {
+            // Single diagonal red stripe over the base color
+            const base = getPastelColor(team && team.typeId) || '#dfe6e9';
+            return `linear-gradient(135deg, transparent 0%, transparent 45%, rgba(227,6,19,0.7) 45%, rgba(227,6,19,0.7) 55%, transparent 55%, transparent 100%), ${base}`;
+        }
+    } catch (e) { /* ignore */ }
+    return getPastelColor(team && team.typeId);
+}
 let ganttStatusFilter = 'active'; // Estado inicial
 
 function setGanttStatusFilter(status) {
@@ -2368,7 +2373,7 @@ function renderGantt() {
                         let barOpacity = proj.status === 'tbd' ? "0.6" : "1";
 
                         html += `<div class="gantt-bar" oncontextmenu="showBarContextMenu(${pIdx}, ${aIdx}, ${t.originalTIdx}, event)" 
-                            style="left:${lp}%; width:${ws}%; height:${h - 4}%; top:${h * act.teams.indexOf(t)}%; background:${getPastelColor(t.typeId)}; opacity:${barOpacity};">
+                            style="left:${lp}%; width:${ws}%; height:${h - 4}%; top:${h * act.teams.indexOf(t)}%; background:${getBarColor(t)}; opacity:${barOpacity}; background-repeat: no-repeat; background-size: 100% 100%;">
                             <span class="floating-label">${t.name}</span>
                         </div>`;
                     } else {
@@ -2378,7 +2383,7 @@ function renderGantt() {
                         let barOpacity = proj.status === 'tbd' ? "0.6" : "1";
 
                         html += `<div class="gantt-bar" oncontextmenu="showBarContextMenu(${pIdx}, ${aIdx}, ${t.originalTIdx}, event)" 
-                            style="left:${lp}%; width:${ws}%; height:${h - 4}%; top:${h * act.teams.indexOf(t)}%; background:${getPastelColor(t.typeId)}; opacity:${barOpacity};">
+                            style="left:${lp}%; width:${ws}%; height:${h - 4}%; top:${h * act.teams.indexOf(t)}%; background:${getBarColor(t)}; opacity:${barOpacity}; background-repeat: no-repeat; background-size: 100% 100%;">
                             <span class="floating-label">${t.name}</span>
                         </div>`;
                     }
@@ -2775,7 +2780,6 @@ function analizarMantenimiento() {
         link.setAttribute("href", encodedUri); link.setAttribute("download", `HUF_${type.toUpperCase()}_Report_${new Date().toLocaleDateString()}.csv`);
         document.body.appendChild(link); link.click();
     }
-// Sustituye tu función initApp actual con esta versión mejorada
 async function initApp() {
     // 1. Obtener configuración de año desde Firebase
     try {
@@ -2787,10 +2791,16 @@ async function initApp() {
         renderFilterGrids();
 
         // 2. Carga automática de Capacidad y Proyectos
-        // Se asegura que al iniciar, los listeners se activen y los datos se traigan de Firebase
+        // Se asegura que al iniciar, los datos se traigan de Firebase como fuente de verdad
         await Promise.all([
             db.ref(DB_CAPACITY).once('value').then(snap => {
-                capacityData = snap.val() || {};
+                const data = snap.val() || {};
+                
+                // Actualizamos el objeto global que usan las gráficas
+                window.customCapacity = data;
+                
+                // Actualizamos el caché local para consistencia
+                localStorage.setItem('huf_custom_capacity', JSON.stringify(data));
             }),
             db.ref(DB_PROJECTS).once('value').then(snap => {
                 const data = snap.val();
@@ -2802,16 +2812,19 @@ async function initApp() {
         // 3. Inicializar componentes visuales
         if(charts.length === 0) initCharts();
         
-        // 4. Activar escuchas en tiempo real
+        // 4. Activar escuchas en tiempo real (para que los cambios futuros se vean sin recargar)
         listenData();
         
         // 5. Refrescar interfaz
+        // Llamamos a las funciones de renderizado después de asegurar que capacityData está cargado
         updateUI();
+        
+        if (typeof renderAllStats === 'function') renderAllStats();
         if (typeof renderGantt === 'function') renderGantt();
 
     } catch (error) {
         console.error("Error al inicializar la app:", error);
-        // Opcional: mostrar un aviso de que no se pudieron cargar los datos
+        Swal.fire('Error', 'No se pudieron cargar los datos de la nube.', 'error');
     }
 }
 
@@ -3249,9 +3262,7 @@ function editProject(id) {
         loadCapacityYear();
     }
     function loadCapacityYear() { const year = document.getElementById('capYearSelect').value; const vals = capacityData[year] || Array(12).fill(500); document.querySelectorAll('.cap-input').forEach((inp, i) => inp.value = vals[i]); }
-    function saveCapacity() {
-         const year = document.getElementById('capYearSelect').value; const vals = Array.from(document.querySelectorAll('.cap-input')).map(i => parseFloat(i.value) || 0); db.ref(`${DB_CAPACITY}/${year}`).set(vals).then(() =>
-          { Swal.fire("Capacity Updted!", "", "success"); showModule('main-app'); }); }
+
 
 
 async function deleteProject(id) {
@@ -3617,25 +3628,7 @@ function copyFirstToAll() {
     setTimeout(() => { btn.innerHTML = originalText; }, 1500);
 }
 // Inicialización de selectores al cargar
-function initCapacitySelectors() {
-    const devSelect = document.getElementById('capDeviceSelect');
-    const yearSelect = document.getElementById('capYearSelect');
-    
-    // Llenar equipos
-    if(window.huf_devices_config) {
-        devSelect.innerHTML = window.huf_devices_config.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
-    }
 
-    // Llenar años (2024 a 2030)
-    yearSelect.innerHTML = "";
-    for(let y=2024; y<=2030; y++){
-        let opt = document.createElement('option');
-        opt.value = y; opt.textContent = y;
-        if(y === (window.selectedYear || 2026)) opt.selected = true;
-        yearSelect.appendChild(opt);
-    }
-    loadCapacityGrid();
-}
 
 function initCapacitySelectors() {
     const devSelect = document.getElementById('capDeviceSelect');
@@ -3767,7 +3760,6 @@ function backToStatsAndRefresh() {
     renderAllStats(); // Esto obliga a redibujar las barras con la nueva capacidad
 }
 
-// ACTUALIZADA: Asegura que el guardado sea detectado por renderAllStats
 function saveCapacityData() {
     const devId = document.getElementById('capDeviceSelect').value;
     const year = document.getElementById('capYearSelect').value;
@@ -4675,7 +4667,7 @@ async function openMonthlyView() {
                         cur.setDate(cur.getDate() + 1);
                     }
 
-                    weeksForThisTask.forEach(wn => {
+                    weeksForThisTask.forEach(wn => { 
                         occupancyCount[wn] += 1;
                     });
 
